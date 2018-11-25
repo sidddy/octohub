@@ -1,0 +1,12 @@
+netInfo homeNet = {  .mqttHost = "192.168.123.45",     //can be blank if not using MQTT
+          .mqttUser = "",   //can be blank
+          .mqttPass = "",   //can be blank
+          .mqttPort = 1883,         //default port for MQTT is 1883 - only change if needed.
+          .ssid = "wlan-ssid", 
+          .pass = "wlan-pass"};
+
+
+IPAddress octoprintIp(192, 168, 111, 22);                         // Your IP address of your OctoPrint server (inernal or external)
+String octoprintApikey = "APIKEY"; 
+
+#define MQTT_ROOT "octoprint"
