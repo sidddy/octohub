@@ -8,23 +8,13 @@
 
 #include "config.h"
 
-
 #define MAX_FILENAME_LEN 256
-#define MAX_FILE_COUNT 100
 #define DEBOUNCE 1000
 
 typedef struct {
     char* name;
     short success;
 } file_entry_t;
-
-typedef struct {
-    char* directories[MAX_FILE_COUNT];
-    file_entry_t files[MAX_FILE_COUNT];
-    uint dir_count;
-    uint file_count;
-} folder_t;
-
 
 ESPHelper myEsp(&homeNet);
 WiFiClient client;
@@ -43,15 +33,16 @@ float temperatureBedActual = -1;
 float temperatureBedTarget = -1;
 
 char c_folder[MAX_FILENAME_LEN] = "";
-folder_t c_folder_content;
 
-bool readAPIFolderContent(String& input) {
+bool readAPIFolderContent(String& input, bool selectFirst ) {
+    Serial.println(input);
 
     DynamicJsonBuffer jsonFolderBuffer(1024);
     JsonObject& root = jsonFolderBuffer.parseObject(input);
 
     if (!root.success()) {
         Debug.println("JSON parsing failed!");
+        Debug.println(input);
         root.printTo(Debug);
         Debug.println("");
         return false;
@@ -63,44 +54,59 @@ bool readAPIFolderContent(String& input) {
     jsonFolderRoot->printTo(Debug);
     Debug.println("");*/
 
-    // clean up old folder data
-    c_folder_content.dir_count = 0;
-    c_folder_content.file_count = 0;
-    for (int i=0; i<MAX_FILE_COUNT; i++) {
-        if (c_folder_content.directories[i] != NULL) {
-            free(c_folder_content.directories[i]);
-            c_folder_content.directories[i] = NULL;
+    if (root.containsKey("from") &&  root.containsKey("to")) {
+        int from = root["from"];
+        int to = root["to"];
+        int total = root["total"];
+        
+        if (!selectFirst) {
+            if (to >= from) {
+                for (int i=0; i < root["directories"].size(); i++) {
+                    const char* dir = root["directories"][i];
+                    char buf[MAX_FILENAME_LEN+3];
+                    snprintf(buf, MAX_FILENAME_LEN+3, "<%s>", dir);
+                    sendFolderEntry(from+i, buf);
+                }
+                for (int i=0; i < root["files"].size(); i++) {
+                    const char* filename = root["files"][i][0];
+                    char buf[MAX_FILENAME_LEN+3];
+                    snprintf(buf, MAX_FILENAME_LEN+3, "%s", filename);
+                    sendFolderEntry(from+i+root["directories"].size(), buf);
+                }
+            } else {
+                sendFolder(root["path"], total);
+            }
+            strncpy(c_folder,root["path"],MAX_FILENAME_LEN);
+            Serial.print("c_folder: ");
+            Serial.println(c_folder);
+            
+        } else {
+          if (root["directories"].size() > 0) {
+              const char* dir = root["directories"][0];
+              if (!strcmp(dir, "..")) {
+                 c_folder[strlen(c_folder)-1] = '\0';
+                 char* pos = strrchr(c_folder, '/');
+                 if (pos != NULL) {
+                     pos[1] = '\0';
+                     setFolder(c_folder);
+                 }
+              } else {
+                  char buf[MAX_FILENAME_LEN*2+10];
+                  snprintf(buf, MAX_FILENAME_LEN*2+10, "%s%s/", c_folder, dir);
+                  Serial.print("Selected folder: ");
+                  Serial.println(dir);
+                  Serial.print("New folder: ");
+                  Serial.println(buf);
+                  setFolder(buf);
+              }
+          } else if (root["files"].size() > 0) {
+            const char* file = root["files"][0][0];
+            String fullFilename = String(c_folder) + String(file);
+            api.octoPrintFileSelect(fullFilename);
+          }
         }
-        if (c_folder_content.files[i].name != NULL) {
-            free(c_folder_content.files[i].name);
-            c_folder_content.files[i].name = NULL;
-        }
-        c_folder_content.files[i].success = 0;
     }
 
-    // build new folder data
-
-    c_folder_content.dir_count = (root["directories"].size()<=MAX_FILE_COUNT)?root["directories"].size():MAX_FILE_COUNT;
-    c_folder_content.file_count = (root["files"].size()<=MAX_FILE_COUNT)?root["files"].size():MAX_FILE_COUNT;
-
-    for (int i=0; i < c_folder_content.dir_count; i++) {
-        const char* dir = root["directories"][i];
-        c_folder_content.directories[i] = (char*) malloc(strlen(dir)+1);
-        strcpy(c_folder_content.directories[i],dir);
-    }
-    for (int i=0; i < c_folder_content.file_count; i++) {
-        const char* file = root["files"][i][0];
-        const char* succ = root["files"][i][1];
-        c_folder_content.files[i].name = (char*) malloc(strlen(file)+1);
-        strcpy(c_folder_content.files[i].name,file);
-        if (strcmp(succ,"succ") == 0) {
-            c_folder_content.files[i].success = 1;
-        } else if (strcmp(succ,"err") == 0) {
-            c_folder_content.files[i].success = -1;
-        } else c_folder_content.files[i].success = 0;
-    }
-
-    strncpy(c_folder,root["path"],MAX_FILENAME_LEN);
     return true;
 }
 
@@ -229,19 +235,17 @@ void cmdSET_TOOL_TEMP(SerialCommands* sender) {
     sender->GetSerial()->println("ok");
 }
 
-void sendFolder(char* folder, int entries) {
-    char buf[20+MAX_FILENAME_LEN];
-    snprintf(buf,20+MAX_FILENAME_LEN,"FOLDER %s\nFOLDER_ENTRY_COUNT %d\n", folder, entries);
+void sendFolder(const char* folder, int entries) {
+    char buf[50+MAX_FILENAME_LEN];
+    snprintf(buf,50+MAX_FILENAME_LEN,"FOLDER %s\nFOLDER_ENTRY_COUNT %d\n", folder, entries);
     Serial.print(buf);
 }
 
 void setFolder(char* path) {
   String path_str = String((const char*)path);
-  String api_path = String("plugin/octoscreen_plugin?path=");
+  String api_path = String("plugin/octoscreen_plugin?from=1&to=0&path=");
   String result = api.getOctoprintEndpointResults(api_path + path_str);
-  if (readAPIFolderContent(result)) {
-    sendFolder(c_folder, c_folder_content.dir_count+c_folder_content.file_count);
-  }
+  readAPIFolderContent(result, false);
 }
 
 void cmdSET_FOLDER(SerialCommands* sender) {
@@ -253,7 +257,7 @@ void cmdSET_FOLDER(SerialCommands* sender) {
   }
 }
 
-void sendFolderEntry(int no, char* folder_entry) {
+void sendFolderEntry(int no, const char* folder_entry) {
     char buf[128];
     snprintf(buf,128,"FOLDER_ENTRY %d %s\n", no, folder_entry);
     Serial.print(buf);
@@ -268,19 +272,10 @@ void cmdGET_FOLDER_ENTRIES(SerialCommands* sender) {
     int no_from = atoi(param1);
     int no_to = atoi(param2);
 
-    if ((no_from >= 0) && (no_from < MAX_FILE_COUNT) && (no_to >= no_from) && (no_from < MAX_FILE_COUNT)) {
-      for (int no=no_from; no<=no_to; no++) {
-        if (no < c_folder_content.dir_count) {
-          char buf[MAX_FILENAME_LEN+10];
-          snprintf(buf, MAX_FILENAME_LEN+10, "<%s>", c_folder_content.directories[no]);
-          sendFolderEntry(no, buf);
-        } else if (no < c_folder_content.dir_count + c_folder_content.file_count) {
-          char buf[MAX_FILENAME_LEN+10];
-          snprintf(buf, MAX_FILENAME_LEN+10, "%s", c_folder_content.files[no-c_folder_content.dir_count]);
-          sendFolderEntry(no, buf);
-        }
-      }
-    }
+    String path_str = String((const char*)c_folder);
+    String api_path = String("plugin/octoscreen_plugin?from=") + no_from + String("&to=") + no_to + String("&path=");
+    String result = api.getOctoprintEndpointResults(api_path + path_str);
+    readAPIFolderContent(result, false);
   }
   sender->GetSerial()->println("ok");
 }
@@ -288,28 +283,16 @@ void cmdGET_FOLDER_ENTRIES(SerialCommands* sender) {
 void cmdSEL_FOLDER_ENTRY(SerialCommands* sender) {
   Debug.println("SEL_FOLDER_ENTRY");
   char* param = sender->Next();
-  int no = atoi(param);
-  if ((no >= 0) && (no < MAX_FILE_COUNT)) {
-    if (no < c_folder_content.dir_count) {
-      if (!strcmp(c_folder_content.directories[no], "..")) {
-        c_folder[strlen(c_folder)-1] = '\0';
-        char* pos = strrchr(c_folder, '/');
-        if (pos != NULL) {
-          pos[1] = '\0';
-          setFolder(c_folder);
-        }
-      } else {
-        char buf[MAX_FILENAME_LEN*2+10];
-        snprintf(buf, MAX_FILENAME_LEN*2+10, "%s%s/", c_folder, c_folder_content.directories[no]);
-        setFolder(buf);
-      }
-    } else if (no < c_folder_content.dir_count + c_folder_content.file_count) {
-      char buf[MAX_FILENAME_LEN*2+10];
-      snprintf(buf, MAX_FILENAME_LEN*2+10, "%s%s", c_folder, c_folder_content.files[no-c_folder_content.dir_count]);
-      String filename = String(buf);
-      api.octoPrintFileSelect(filename);
-    }
+
+  if (param != NULL) {
+    int no = atoi(param);
+    
+    String path_str = String((const char*)c_folder);
+    String api_path = String("plugin/octoscreen_plugin?from=") + no + String("&to=") + no + String("&path=");
+    String result = api.getOctoprintEndpointResults(api_path + path_str);
+    readAPIFolderContent(result, true);
   }
+  
   sender->GetSerial()->println("ok");
 }
 
@@ -357,10 +340,6 @@ void cmdCANCEL(SerialCommands* sender) {
   api.octoPrintJobCancel();
   sender->GetSerial()->println("ok");
 }
-
-
-
-
 
 SerialCommand *gcodeCommandList[] =
     {   new SerialCommand("JOG_X", cmdJOG_X),
@@ -570,14 +549,6 @@ void setup() {
     }
 
     serialCommands.SetDefaultHandler(&cmdUnknown);
-
-    c_folder_content.dir_count = 0;
-    c_folder_content.file_count = 0;
-    for (int i=0; i<MAX_FILE_COUNT; i++) {
-        c_folder_content.directories[i] = NULL;
-        c_folder_content.files[i].name = NULL;
-        c_folder_content.files[i].success = 0;
-    }
 
     Debug.println("Initialization Finished.");
 }
