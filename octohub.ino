@@ -35,8 +35,6 @@ float temperatureBedTarget = -1;
 char c_folder[MAX_FILENAME_LEN] = "";
 
 bool readAPIFolderContent(String& input, bool selectFirst ) {
-    Serial.println(input);
-
     DynamicJsonBuffer jsonFolderBuffer(1024);
     JsonObject& root = jsonFolderBuffer.parseObject(input);
 
@@ -69,17 +67,21 @@ bool readAPIFolderContent(String& input, bool selectFirst ) {
                 }
                 for (int i=0; i < root["files"].size(); i++) {
                     const char* filename = root["files"][i][0];
-                    char buf[MAX_FILENAME_LEN+3];
-                    snprintf(buf, MAX_FILENAME_LEN+3, "%s", filename);
+                    const char* succ = root["files"][i][1];
+                    char buf[MAX_FILENAME_LEN+5];
+                    if (!strcmp(succ, "succ")) {
+                        snprintf(buf, MAX_FILENAME_LEN+5, "[+]%s", filename);
+                    } else if (!strcmp(succ, "err")) {
+                        snprintf(buf, MAX_FILENAME_LEN+5, "[-]%s", filename);
+                    } else {
+                        snprintf(buf, MAX_FILENAME_LEN+5, "%s", filename);
+                    }
                     sendFolderEntry(from+i+root["directories"].size(), buf);
                 }
             } else {
                 sendFolder(root["path"], total);
             }
             strncpy(c_folder,root["path"],MAX_FILENAME_LEN);
-            Serial.print("c_folder: ");
-            Serial.println(c_folder);
-            
         } else {
           if (root["directories"].size() > 0) {
               const char* dir = root["directories"][0];
@@ -93,10 +95,6 @@ bool readAPIFolderContent(String& input, bool selectFirst ) {
               } else {
                   char buf[MAX_FILENAME_LEN*2+10];
                   snprintf(buf, MAX_FILENAME_LEN*2+10, "%s%s/", c_folder, dir);
-                  Serial.print("Selected folder: ");
-                  Serial.println(dir);
-                  Serial.print("New folder: ");
-                  Serial.println(buf);
                   setFolder(buf);
               }
           } else if (root["files"].size() > 0) {
@@ -106,7 +104,6 @@ bool readAPIFolderContent(String& input, bool selectFirst ) {
           }
         }
     }
-
     return true;
 }
 
